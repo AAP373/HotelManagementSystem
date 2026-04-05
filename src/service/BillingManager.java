@@ -6,54 +6,62 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Week 2  – Wrapper class arithmetic (Double/Integer).
+ * Week 2  – Wrapper class arithmetic inside Bill.
  * Week 8  – ArrayList for bill collection.
+ * Week 6  – Bills persisted via FileManager.
  */
 public class BillingManager {
 
     private final HotelManager hotelManager;
-    // Week 8 – ArrayList of bills
     private final List<Bill>   bills = new ArrayList<>();
 
     public BillingManager(HotelManager hotelManager) {
         this.hotelManager = hotelManager;
     }
 
-    /**
-     * Generate a Bill for the active booking on a room.
-     * Pulls all services for the room and appends them.
-     */
+    /** Load saved bills from disk (called on startup). */
+    public synchronized void loadBills() {
+        List<Bill> saved = FileManager.loadBills();
+        bills.addAll(saved);
+        System.out.println("[BillingManager] Loaded " + saved.size() + " bills.");
+    }
+
+    /** Save all bills to disk (called on close). */
+    public synchronized void saveBills() {
+        FileManager.saveBills(new ArrayList<>(bills));
+    }
+
+    /** Generate a Bill for the active booking on a room. */
     public synchronized Bill generateBill(int roomNumber) {
         Booking booking = hotelManager.getActiveBookingForRoom(roomNumber);
         if (booking == null) return null;
 
-        // Find customer name
+        // Check if bill already exists for this booking
+        for (Bill existing : bills) {
+            if (existing.getBookingId() == booking.getBookingId()) return existing;
+        }
+
         Customer customer = hotelManager.getCustomer(booking.getCustomerId());
         String   name     = customer != null ? customer.getName() : "Guest";
 
         Bill bill = new Bill(booking.getBookingId(), roomNumber, name, booking.getRoomCost());
 
-        // Attach services
-        List<ServiceItem> roomServices = hotelManager.getServicesForRoom(roomNumber);
-        for (ServiceItem s : roomServices) {
-            bill.addService(s);   // Week 2 – Double arithmetic inside Bill.addService()
+        // Attach all services for this room
+        for (ServiceItem s : hotelManager.getServicesForRoom(roomNumber)) {
+            bill.addService(s);
         }
 
         bills.add(bill);
         return bill;
     }
 
-    /** Retrieve existing bill by booking ID, or null. */
     public synchronized Bill getBillByBookingId(int bookingId) {
-        for (Bill b : bills) {
+        for (Bill b : bills)
             if (b.getBookingId() == bookingId) return b;
-        }
         return null;
     }
 
-    public synchronized List<Bill> getAllBills() {
-        return new ArrayList<>(bills);
-    }
+    public synchronized List<Bill> getAllBills()  { return new ArrayList<>(bills); }
 
     public synchronized boolean markPaid(int bookingId) {
         Bill b = getBillByBookingId(bookingId);

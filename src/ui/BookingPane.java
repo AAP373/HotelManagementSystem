@@ -2,7 +2,6 @@ package ui;
 
 import model.*;
 import service.HotelManager;
-import threads.BookingTask;
 import javafx.beans.property.*;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -12,10 +11,10 @@ import javafx.scene.layout.*;
 
 public class BookingPane extends BorderPane {
 
-    private final HotelManager           manager;
-    private final TableView<Booking>     table = new TableView<>();
-    private final ObservableList<Booking> data = FXCollections.observableArrayList();
-    private final TextArea               log   = new TextArea();
+    private final HotelManager            manager;
+    private final TableView<Booking>      table = new TableView<>();
+    private final ObservableList<Booking> data  = FXCollections.observableArrayList();
+    private final TextArea                log   = new TextArea();
 
     public BookingPane(HotelManager manager) {
         this.manager = manager;
@@ -26,15 +25,15 @@ public class BookingPane extends BorderPane {
 
     @SuppressWarnings("unchecked")
     private void buildUI() {
-        Label heading = new Label("📋  Bookings & Services");
+        Label heading = new Label("Bookings & Services");
         heading.setStyle("-fx-font-size:18px; -fx-font-weight:bold; -fx-text-fill:#1a237e;");
 
-        // ── Table ─────────────────────────────────────────────────────────
+        // Table columns
         TableColumn<Booking, Number> colId     = new TableColumn<>("Booking ID");
         TableColumn<Booking, Number> colCust   = new TableColumn<>("Customer ID");
         TableColumn<Booking, Number> colRoom   = new TableColumn<>("Room");
         TableColumn<Booking, Number> colNights = new TableColumn<>("Nights");
-        TableColumn<Booking, Number> colCost   = new TableColumn<>("Room Cost (₹)");
+        TableColumn<Booking, Number> colCost   = new TableColumn<>("Room Cost");
         TableColumn<Booking, String> colStatus = new TableColumn<>("Status");
         TableColumn<Booking, String> colIn     = new TableColumn<>("Check-In");
 
@@ -54,59 +53,62 @@ public class BookingPane extends BorderPane {
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         table.setStyle("-fx-font-size:13px;");
 
-        // ── Input fields ──────────────────────────────────────────────────
-        TextField tfCustId  = field("Customer ID",   80);
-        TextField tfRoomNo  = field("Room Number",   100);
-        TextField tfNights  = field("Nights",        70);
-        TextField tfItems   = field("Items (laundry)", 110);
-        TextField tfHours   = field("Extra Hours",   90);
+        // Input fields
+        TextField tfCustId = field("Customer ID",     80);
+        TextField tfRoomNo = field("Room Number",    100);
+        TextField tfNights = field("Nights",          70);
+        TextField tfItems  = field("Items (laundry)",110);
+        TextField tfHours  = field("Extra Hours",     90);
 
-        // ── Buttons ───────────────────────────────────────────────────────
-        Button btnBook     = styledBtn("📋 Book Room",        "#1565c0");
-        Button btnCheckout = styledBtn("🚪 Checkout",         "#c62828");
-        Button btnLaundry  = styledBtn("👕 Laundry",          "#6a1b9a");
-        Button btnLate     = styledBtn("⏰ Late Checkout",     "#e65100");
-        Button btnRefresh  = styledBtn("🔄 Refresh",          "#37474f");
+        // Buttons
+        Button btnBook     = styledBtn("Book Room",      "#1565c0");
+        Button btnCheckout = styledBtn("Checkout",       "#c62828");
+        Button btnLaundry  = styledBtn("Laundry",        "#6a1b9a");
+        Button btnLate     = styledBtn("Late Checkout",  "#e65100");
+        Button btnRefresh  = styledBtn("Refresh",        "#37474f");
 
-        // ── Book room (uses BookingTask thread – Week 3 & 4) ──────────────
+        // ── Book room: call bookRoom directly so result is immediate ──────
         btnBook.setOnAction(e -> {
             try {
                 int cid    = Integer.parseInt(tfCustId.getText().trim());
                 int rn     = Integer.parseInt(tfRoomNo.getText().trim());
                 int nights = Integer.parseInt(tfNights.getText().trim());
 
-                // Week 3 – Runnable thread; Week 4 – synchronized inside HotelManager
-                Thread t = new Thread(new BookingTask(cid, rn, nights, manager), "BookingTask-" + rn);
-                t.start();
-                try { t.join(); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
-
-                appendLog("Booking request sent for Room " + rn + " (Customer " + cid + ", " + nights + " nights).");
+                boolean success = manager.bookRoom(cid, rn, nights);
+                if (success) {
+                    appendLog("Room " + rn + " booked for Customer " + cid + " (" + nights + " nights).");
+                } else {
+                    appendLog("FAILED - Customer " + cid + " not found, or Room " + rn + " unavailable.");
+                    appendLog("  Customers loaded: " + manager.getAllCustomers().size());
+                    appendLog("  Customer exists: " + (manager.getCustomer(cid) != null));
+                    appendLog("  Room available: " + (manager.getRoom(rn) != null && manager.getRoom(rn).isAvailable()));
+                }
                 refresh();
-            } catch (NumberFormatException ex) { alert("Enter valid numeric IDs / nights."); }
+            } catch (NumberFormatException ex) { alert("Enter valid numeric values."); }
         });
 
-        // ── Checkout ──────────────────────────────────────────────────────
+        // ── Checkout: frees room ──────────────────────────────────────────
         btnCheckout.setOnAction(e -> {
             try {
                 int rn = Integer.parseInt(tfRoomNo.getText().trim());
                 boolean ok = manager.checkout(rn);
                 appendLog(ok
-                        ? "✅ Checkout done for Room " + rn + ". Cleaning thread started."
-                        : "❌ No active booking for Room " + rn);
+                        ? "Checkout done for Room " + rn + ". Cleaning started."
+                        : "No active booking for Room " + rn);
                 refresh();
             } catch (NumberFormatException ex) { alert("Enter a valid room number."); }
         });
 
-        // ── Laundry (LaundryTask thread – Week 3) ────────────────────────
+        // ── Laundry ───────────────────────────────────────────────────────
         btnLaundry.setOnAction(e -> {
             try {
                 int rn    = Integer.parseInt(tfRoomNo.getText().trim());
                 int items = Integer.parseInt(tfItems.getText().trim());
                 LaundryService ls = manager.requestLaundry(rn, items);
                 appendLog(ls != null
-                        ? "👕 Laundry request #" + ls.getServiceId() + " submitted. Charge: ₹" + ls.calculateCharge()
-                        : "❌ Room " + rn + " has no active booking.");
-            } catch (NumberFormatException ex) { alert("Enter valid room number and item count."); }
+                        ? "Laundry #" + ls.getServiceId() + " submitted. Charge: Rs" + ls.calculateCharge()
+                        : "Room " + rn + " has no active booking.");
+            } catch (NumberFormatException ex) { alert("Enter room number and item count."); }
         });
 
         // ── Late checkout ─────────────────────────────────────────────────
@@ -116,25 +118,18 @@ public class BookingPane extends BorderPane {
                 int hours = Integer.parseInt(tfHours.getText().trim());
                 LateCheckoutService lcs = manager.addLateCheckout(rn, hours);
                 appendLog(lcs != null
-                        ? "⏰ Late checkout added for Room " + rn + ". Charge: ₹" + lcs.calculateCharge()
-                        : "❌ Room " + rn + " has no active booking.");
-            } catch (NumberFormatException ex) { alert("Enter valid room number and hours."); }
+                        ? "Late checkout for Room " + rn + ". Charge: Rs" + lcs.calculateCharge()
+                        : "Room " + rn + " has no active booking.");
+            } catch (NumberFormatException ex) { alert("Enter room number and hours."); }
         });
 
         btnRefresh.setOnAction(e -> refresh());
 
-        // ── Layout ────────────────────────────────────────────────────────
         GridPane form = new GridPane();
         form.setHgap(10); form.setVgap(8);
         form.setPadding(new Insets(10, 0, 10, 0));
-
-        form.addRow(0,
-                lbl("Customer ID:"), tfCustId,
-                lbl("Room #:"),  tfRoomNo,
-                lbl("Nights:"),  tfNights);
-        form.addRow(1,
-                lbl("Items:"), tfItems,
-                lbl("Extra Hrs:"), tfHours);
+        form.addRow(0, lbl("Customer ID:"), tfCustId, lbl("Room #:"), tfRoomNo, lbl("Nights:"), tfNights);
+        form.addRow(1, lbl("Items:"), tfItems, lbl("Extra Hrs:"), tfHours);
 
         HBox btnRow = new HBox(10, btnBook, btnCheckout, btnLaundry, btnLate, btnRefresh);
         btnRow.setPadding(new Insets(4, 0, 4, 0));
@@ -150,9 +145,7 @@ public class BookingPane extends BorderPane {
 
     public void refresh() { data.setAll(manager.getAllBookings()); }
 
-    private void appendLog(String msg) {
-        log.appendText(msg + "\n");
-    }
+    private void appendLog(String msg) { log.appendText(msg + "\n"); }
 
     private TextField field(String prompt, double width) {
         TextField tf = new TextField();

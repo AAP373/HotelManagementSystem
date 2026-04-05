@@ -13,35 +13,25 @@ public class HotelManagementApp extends Application implements AppController {
 
     private HotelManager   hotelManager;
     private BillingManager billingManager;
-    private MainDashboard dashboard;
-    private RoomPane      roomPane;
-    private BookingPane   bookingPane;
-    private CustomerPane  customerPane;
-    private BillingPane   billingPane;
-
-    private BorderPane root;
+    private MainDashboard  dashboard;
+    private RoomPane       roomPane;
+    private BookingPane    bookingPane;
+    private CustomerPane   customerPane;
+    private BillingPane    billingPane;
+    private BorderPane     root;
 
     @Override
     public void start(Stage stage) {
-
-        // ── Service layer ─────────────────────────────────────────────────
         hotelManager   = new HotelManager();
         billingManager = new BillingManager(hotelManager);
 
-        // Week 6 – Deserialize persisted rooms on startup
-        FileManager.loadRooms().forEach(hotelManager::addRoom);
-        hotelManager.seedDefaultRooms();   // no-op if rooms already loaded
+        // Clean up old .ser files from previous version so they don't conflict
+        FileManager.cleanLegacyFiles();
 
-        // Week 6 – Deserialize persisted bookings
-        FileManager.loadBookings().forEach(b -> {
-            // Re-mark occupied rooms based on active bookings
-            if (b.getStatus() == model.Booking.Status.ACTIVE) {
-                model.Room r = hotelManager.getRoom(b.getRoomNumber());
-                if (r != null) r.setAvailable(false);
-            }
-        });
+        // Load ALL persisted data
+        hotelManager.loadAll();
+        billingManager.loadBills();
 
-        // ── UI panes ──────────────────────────────────────────────────────
         dashboard    = new MainDashboard(this);
         roomPane     = new RoomPane(hotelManager);
         bookingPane  = new BookingPane(hotelManager);
@@ -50,23 +40,22 @@ public class HotelManagementApp extends Application implements AppController {
 
         root = dashboard;
 
-        // ── Scene ─────────────────────────────────────────────────────────
         Scene scene = new Scene(root, 1150, 700);
-        stage.setTitle("🏨  Grand Hotel Management System");
+        stage.setTitle("Grand Hotel Management System");
         stage.setScene(scene);
         stage.setMinWidth(900);
         stage.setMinHeight(550);
 
+        // Save ALL data on close
         stage.setOnCloseRequest(e -> {
-            FileManager.saveRooms(hotelManager.getAllRooms());
-            FileManager.saveBookings(hotelManager.getAllBookings());
-            System.out.println("[App] Data saved on exit.");
+            hotelManager.saveAll();
+            billingManager.saveBills();
+            System.out.println("[App] All data saved.");
         });
 
         stage.show();
     }
 
-   
     @Override
     public void showPane(String paneName) {
         switch (paneName) {
@@ -77,7 +66,5 @@ public class HotelManagementApp extends Application implements AppController {
         }
     }
 
-    public static void main(String[] args) {
-        launch(args);
-    }
+    public static void main(String[] args) { launch(args); }
 }

@@ -7,29 +7,72 @@ import threads.LaundryTask;
 import java.util.*;
 
 /**
- * Central hotel manager.
- * Week 4  – synchronized methods to prevent race conditions.
+ * Week 4  – synchronized methods preventing race conditions.
  * Week 8  – HashMap, ArrayList, Iterator, Collections.sort().
- * Week 4  – wait()/notify() via notifyLaundryComplete().
  */
 public class HotelManager {
 
-    // Week 8 – HashMap: roomNumber → Room
     private final Map<Integer, Room>     rooms     = new HashMap<>();
-    // Week 8 – HashMap: customerId → Customer
     private final Map<Integer, Customer> customers = new HashMap<>();
-    // Week 8 – ArrayList of bookings
     private final List<Booking>          bookings  = new ArrayList<>();
-    // Week 8 – ArrayList of service items
     private final List<ServiceItem>      services  = new ArrayList<>();
+    private final Set<Integer>           completedLaundry = new HashSet<>();
 
-    // Counters
     private int customerCounter = 1;
     private int bookingCounter  = 1;
     private int serviceCounter  = 1;
 
-    // Set of completed laundry IDs (Week 4 – shared state across threads)
-    private final Set<Integer> completedLaundry = new HashSet<>();
+    // ════════════════════════════════════════════════════════════════════════
+    //  LOAD persisted data (called from HotelManagementApp on startup)
+    // ════════════════════════════════════════════════════════════════════════
+
+    public synchronized void loadAll() {
+        // Rooms
+        FileManager.loadRooms().forEach(r -> rooms.put(r.getRoomNumber(), r));
+
+        // Customers – restore counter so new IDs don't clash
+        List<Customer> savedCustomers = FileManager.loadCustomers();
+        for (Customer c : savedCustomers) {
+            customers.put(c.getCustomerId(), c);
+            if (c.getCustomerId() >= customerCounter)
+                customerCounter = c.getCustomerId() + 1;
+        }
+
+        // Bookings – restore counter + re-mark occupied rooms
+        List<Booking> savedBookings = FileManager.loadBookings();
+        for (Booking b : savedBookings) {
+            bookings.add(b);
+            if (b.getBookingId() >= bookingCounter)
+                bookingCounter = b.getBookingId() + 1;
+            if (b.getStatus() == Booking.Status.ACTIVE) {
+                Room r = rooms.get(b.getRoomNumber());
+                if (r != null) { r.setAvailable(false); r.setCleaningStatus("Occupied"); }
+            }
+        }
+
+        // Services
+        List<ServiceItem> savedServices = FileManager.loadServices();
+        for (ServiceItem s : savedServices) {
+            services.add(s);
+            if (s.getServiceId() >= serviceCounter)
+                serviceCounter = s.getServiceId() + 1;
+        }
+
+        // Seed default rooms only if nothing was loaded
+        if (rooms.isEmpty()) seedDefaultRooms();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  SAVE all data (called on app close)
+    // ════════════════════════════════════════════════════════════════════════
+
+    public synchronized void saveAll() {
+        FileManager.saveRooms(new ArrayList<>(rooms.values()));
+        FileManager.saveCustomers(new ArrayList<>(customers.values()));
+        FileManager.saveBookings(new ArrayList<>(bookings));
+        FileManager.saveServices(new ArrayList<>(services));
+        System.out.println("[HotelManager] All data saved.");
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     //  ROOM MANAGEMENT
@@ -49,7 +92,6 @@ public class HotelManager {
 
     public synchronized List<Room> getAvailableRooms() {
         List<Room> available = new ArrayList<>();
-        // Week 8 – Iterator
         Iterator<Room> it = rooms.values().iterator();
         while (it.hasNext()) {
             Room r = it.next();
@@ -58,15 +100,12 @@ public class HotelManager {
         return available;
     }
 
-    /** Week 8 – sort rooms by price using Collections.sort() + Comparator. */
     public List<Room> getRoomsSortedByPrice() {
         List<Room> sorted = new ArrayList<>(rooms.values());
-        Collections.sort(sorted,
-                Comparator.comparingInt(r -> r.getRoomType().getPricePerNight()));
+        Collections.sort(sorted, Comparator.comparingInt(r -> r.getRoomType().getPricePerNight()));
         return sorted;
     }
 
-    /** Week 4 – synchronized room status update used by CleaningTask. */
     public synchronized void updateRoomCleaningStatus(int roomNumber, String status) {
         Room r = rooms.get(roomNumber);
         if (r != null) r.setCleaningStatus(status);
@@ -87,34 +126,25 @@ public class HotelManager {
         return c;
     }
 
-    public synchronized Customer getCustomer(int id) {
-        return customers.get(id);
-    }
+    public synchronized Customer getCustomer(int id)     { return customers.get(id); }
 
-    public synchronized List<Customer> getAllCustomers() {
-        return new ArrayList<>(customers.values());
-    }
+    public synchronized List<Customer> getAllCustomers()  { return new ArrayList<>(customers.values()); }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  BOOKING MANAGEMENT  (Week 4 – synchronized to prevent double-booking)
+    //  BOOKING MANAGEMENT
     // ════════════════════════════════════════════════════════════════════════
 
     public synchronized boolean bookRoom(int customerId, int roomNumber, int nights) {
         Room     room     = rooms.get(roomNumber);
         Customer customer = customers.get(customerId);
+        if (room == null || customer == null || !room.isAvailable()) return false;
 
-        if (room == null || customer == null) return false;
-        if (!room.isAvailable()) return false;
-
-        // Mark room occupied
         room.setAvailable(false);
         room.setCleaningStatus("Occupied");
 
-        // Create booking
         Booking b = new Booking(bookingCounter++, customerId, roomNumber, nights);
         b.setRoomCost(room.calculateTariff(nights));
         bookings.add(b);
-
         customer.setAllocatedRoom(roomNumber);
         return true;
     }
@@ -123,26 +153,22 @@ public class HotelManager {
         Room room = rooms.get(roomNumber);
         if (room == null || room.isAvailable()) return false;
 
-        // Find active booking
         Booking active = bookings.stream()
                 .filter(b -> b.getRoomNumber() == roomNumber && b.getStatus() == Booking.Status.ACTIVE)
                 .findFirst().orElse(null);
 
         if (active != null) {
             active.setStatus(Booking.Status.CHECKED_OUT);
-            // Reset customer's room
             Customer c = customers.get(active.getCustomerId());
             if (c != null) c.setAllocatedRoom(-1);
         }
 
-        // Trigger cleaning thread (Week 3)
         room.setCleaningStatus("Needs Cleaning");
         new CleaningTask(roomNumber, this).start();
-
         return true;
     }
 
-    public synchronized List<Booking> getAllBookings() { return new ArrayList<>(bookings); }
+    public synchronized List<Booking> getAllBookings()    { return new ArrayList<>(bookings); }
 
     public synchronized Booking getActiveBookingForRoom(int roomNumber) {
         return bookings.stream()
@@ -151,7 +177,7 @@ public class HotelManager {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  LAUNDRY SERVICE  (Week 3 – spawns LaundryTask thread)
+    //  LAUNDRY
     // ════════════════════════════════════════════════════════════════════════
 
     public synchronized LaundryService requestLaundry(int roomNumber, int itemCount) {
@@ -161,18 +187,15 @@ public class HotelManager {
         LaundryService ls = new LaundryService(serviceCounter++, roomNumber, itemCount);
         services.add(ls);
 
-        // Start background thread (Week 3 – Runnable)
         Thread t = new Thread(new LaundryTask(ls, this), "LaundryThread-" + ls.getServiceId());
         t.setDaemon(true);
         t.start();
-
         return ls;
     }
 
-    /** Week 4 – notify pattern: called by LaundryTask when done. */
     public synchronized void notifyLaundryComplete(int serviceId) {
         completedLaundry.add(serviceId);
-        notifyAll();   // Week 4 – notifyAll()
+        notifyAll();
     }
 
     public synchronized boolean isLaundryComplete(int serviceId) {
@@ -196,22 +219,20 @@ public class HotelManager {
     //  SERVICES
     // ════════════════════════════════════════════════════════════════════════
 
-    public synchronized List<ServiceItem> getAllServices() { return new ArrayList<>(services); }
+    public synchronized List<ServiceItem> getAllServices()         { return new ArrayList<>(services); }
 
     public synchronized List<ServiceItem> getServicesForRoom(int roomNumber) {
         List<ServiceItem> result = new ArrayList<>();
-        for (ServiceItem s : services) {
+        for (ServiceItem s : services)
             if (s.getRoomNumber() == roomNumber) result.add(s);
-        }
         return result;
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  SEED DATA (default rooms on first launch)
+    //  SEED DATA
     // ════════════════════════════════════════════════════════════════════════
 
-    public void seedDefaultRooms() {
-        if (!rooms.isEmpty()) return;
+    private void seedDefaultRooms() {
         addRoom(new StandardRoom(101, false));
         addRoom(new StandardRoom(102, true));
         addRoom(new StandardRoom(103, true));
